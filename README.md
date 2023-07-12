@@ -19,5 +19,7 @@
 ## 捐赠
 ### 请作者喝奶茶，您的支持是作者更新的动力。
 
+![](https://github.com/DuoMx/AutoXuefa/blob/main/Image/wechat.jpg)
+![](https://github.com/DuoMx/AutoXuefa/blob/main/Image/ali.jpg)
 
 # 2023年年度考试答案未出。
