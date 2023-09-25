@@ -2,7 +2,7 @@
 var fullurl =  window.location.href;
 $("[name='password']").val("xfks1234");
 
-var totalAnswer={"14926":"C","14933":"A","14917":"D","14927":"B","14923":"A","14921":"A","14916":"B","14924":"C","14919":"D","14925":"A","14928":"D","14914":"A","14929":"A","14932":"A","14920":"A","14918":"D","14930":"D","14931":"C","14915":"A","14922":"D","14935":"CDE","14943":"ABCD","14937":"ABC","14941":"ABCD","14938":"AD","14939":"ABCD","14936":"ACE","14934":"ABC","14942":"AB","14940":"AC","14950":"V","14949":"V","14944":"V","14952":"V","14946":"V","14951":"V","14948":"V","14945":"X","14947":"X","14953":"V","14973":"B","14958":"A","14959":"C","14969":"B","14961":"D","14960":"D","14968":"B","14966":"A","14970":"C","14965":"B","14967":"A","14971":"B","14957":"A","14962":"D","14964":"C","14972":"C","14954":"A","14956":"A","14963":"C","14955":"A","14981":"ABD","14974":"BCD","14982":"ABCD","14975":"CD","14976":"ABC","14983":"ABCD","14979":"ABCDE","14977":"ABCD","14980":"ABCD","14978":"ABC","14989":"V","14988":"V","14993":"V","14991":"X","14985":"V","14984":"V","14987":"V","14986":"X","14992":"V","14990":"X","15005":"A","15003":"A","15007":"C","15008":"A","15011":"B","14997":"A","14994":"A","15002":"B","15012":"B","15001":"B","14996":"B","15013":"A","14995":"A","15010":"D","15009":"C","15004":"B","14998":"B","15000":"D","15006":"C","14999":"D","15015":"ABD","15014":"BCD","15017":"ACD","15019":"ABC","15023":"ABCD","15018":"ABCD","15016":"ABC","15020":"ABD","15021":"ABC","15022":"ABC","15027":"V","15028":"V","15026":"V","15032":"V","15033":"V","15030":"X","15031":"V","15025":"X","15029":"V","15024":"V"};
+var totalAnswer={"17733":"B","17727":"A","17717":"A","17714":"B","17716":"B","17722":"A","17724":"C","17723":"C","17732":"B","17726":"B","17725":"D","17715":"B","17728":"C","17718":"B","17720":"A","17719":"A","17721":"B","17731":"B","17729":"B","17730":"A","17736":"CD","17739":"ABCD","17743":"ABCD","17737":"ABCD","17742":"ABCD","17734":"AB","17741":"ACD","17738":"ABCD","17740":"BC","17735":"ABCD","17746":"V","17745":"V","17750":"X","17748":"V","17749":"V","17753":"V","17751":"V","17747":"V","17744":"V","17752":"V","17769":"B","17762":"A","17763":"C","17766":"B","17772":"B","17765":"D","17760":"A","17754":"B","17771":"B","17755":"D","17756":"B","17773":"B","17768":"C","17767":"A","17764":"C","17770":"A","17758":"B","17757":"B","17761":"A","17759":"D","17780":"ABD","17777":"ABCD","17774":"ABCD","17776":"CD","17783":"ABCD","17781":"ABCD","17779":"ABCD","17778":"ABCD","17775":"ABCD","17782":"ABCD","17788":"V","17787":"X","17789":"V","17793":"V","17790":"X","17786":"V","17785":"V","17792":"V","17791":"V","17784":"V","17807":"A","17802":"A","17812":"B","17806":"B","17795":"D","17794":"B","17798":"A","17810":"A","17805":"D","17813":"B","17811":"B","17809":"B","17801":"B","17808":"C","17799":"D","17796":"A","17804":"C","17800":"A","17797":"B","17803":"C","17822":"ABCD","17816":"CD","17823":"ABCD","17821":"ACD","17815":"ABCD","17817":"ABCD","17820":"ABD","17819":"ABCD","17814":"ABCD","17818":"ABCD","17832":"V","17827":"V","17833":"V","17826":"V","17830":"X","17824":"V","17829":"V","17831":"V","17825":"V","17828":"V"};
 
 var courseList =[];//课程列表
 var chapterList =[];//章节列表
@@ -223,54 +223,80 @@ var sleep = function(time) {
 var indexexam = fullurl.indexOf("exams");
 if(indexexam>0)
 {
-	var examnum = fullurl.substring(indexexam+6);	
-	var examurl = "/study/exams/"+examnum;	 
-	//alert(examurl);
-	var allanserhasfind = false;
-	var examarea = 'none';
-	var answerjson={};
-	var rightqidcount= 0;
-	var wrongqidcount = 0;
-	var AnswerString = "";
-	$(".item").each(function(){
-		var qid=$(this).attr("qid");				
-		if(totalAnswer[qid].length>0){
-			AnswerString+=qid+"="+totalAnswer[qid]+"&";
-			rightqidcount ++;				
-		}
-		else{
-			wrongqidcount++;
-			$(this).css("background", "#ccc");
-		}		
-		//answerjson[qid]=answer;
-	});
-	if(wrongqidcount>0){
-		allanserhasfind = false;
-	}
-	else{
-		allanserhasfind = true;			
-	}
-	AnswerString=AnswerString.substring(0,AnswerString.length-1);	
-	if(allanserhasfind){
-		jQuery.ajax({
-			url:examurl,
-			method:"post",
-			data: AnswerString,
-			success:function(data, text, xhr){
-				if(xhr.status == 200){                        
-						//alert("提交成功!");                            
-							window.location.href = '/study/exam';                        
-				}else{
-					alert(data);
-				}
-			},
-			error:function(data){
-				if(data.status == 400){
-					alert(data.responseText)
-				}else{
-					alert("提交失败");
-				}
-			}
-		})
-	}
-}
+        var examnum = fullurl.substring(indexexam+6);
+        var examurl = "/study/exams/"+examnum;
+        var saveexamurl = "/study/saveAnswer/"+examnum;
+        //alert(examurl);
+        var allanserhasfind = false;
+        var examarea = 'none';
+        var answerjson={};
+        var rightqidcount= 0;
+        var wrongqidcount = 0;
+        var AnswerString = "";
+        $(".item").each(function(){
+            var qid=$(this).attr("qid");
+            if (typeof totalAnswer[qid] === 'undefined') {
+                wrongqidcount++;
+                $(this).css("background", "#ccc");
+            }
+            else{
+                AnswerString+=qid+"="+totalAnswer[qid]+"&";
+                rightqidcount ++;
+            }
+            //answerjson[qid]=answer;
+        });
+        if(wrongqidcount>0){
+            allanserhasfind = false;
+            alert("共"+wrongqidcount+"条题目未找到答案，未找到答案的题目已变灰!");
+        }
+        else{
+            allanserhasfind = true;
+        }
+
+        AnswerString=AnswerString.substring(0,AnswerString.length-1);
+        if(allanserhasfind){
+            jQuery.ajax({
+                url:saveexamurl,
+                method:"post",
+                data: AnswerString,
+                success:function(data, text, xhr){
+                    if(xhr.status == 200){
+                        alert("已找到全部题目答案，并保存答案成功，效果刷新页面可见!");
+                        var issubmitanswer=confirm("是否自动提交答案？");
+                        if(issubmitanswer){
+                            jQuery.ajax({
+                                url:examurl,
+                                method:"post",
+                                data: AnswerString,
+                                success:function(data, text, xhr){
+                                    if(xhr.status == 200){
+                                        window.location.href = '/study/exam';
+                                    }else{
+                                        alert(data);
+                                    }
+                                },
+                                error:function(data){
+                                    if(data.status == 400){
+                                        alert(data.responseText)
+                                    }else{
+                                        alert("提交失败");
+                                    }
+                                }
+                            })
+                        }
+                    }else{
+                        alert(data);
+                    }
+                },
+                error:function(data){
+                    if(data.status == 400){
+                        alert(data.responseText)
+                    }else{
+                        alert("提交失败");
+                    }
+                }
+            })
+
+
+        }
+    }
