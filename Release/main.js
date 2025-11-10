@@ -64,7 +64,7 @@ function StartExercise () {
 function FindCourseList(){	
 	$.ajax({  
 		type : "get",  
-		url : "http://xfks-study.gdsf.gov.cn/study/index",  
+		url : "https://xfks-study.gdsf.gov.cn/study/index",  
 		data : null,  
 		async : false,  
 		success : function(data){ 				
@@ -107,7 +107,7 @@ function FindChapterList(courseUrl){
 	});		
 	chaptersdom.children("li").each(function(){		
 		if($(this).find("a").attr("href").indexOf("study/course")>0){
-		   chapterList.push("http://xfks-study.gdsf.gov.cn"+$(this).find("a").attr("href"));
+		   chapterList.push("https://xfks-study.gdsf.gov.cn"+$(this).find("a").attr("href"));
 		   chapterCount++;
 		}		
 		
@@ -160,7 +160,7 @@ if(indexexercise>0){
 					if(isback2index){
 						changeBadgeColor("blue");
 						changeBadgeText("完成");
-						window.location.href= "http://xfks-study.gdsf.gov.cn/study/index";	
+						window.location.href= "https://xfks-study.gdsf.gov.cn/study/index";	
 					}					
 				}			
 			}			  
@@ -300,3 +300,4 @@ if(indexexam>0)
 
         }
     }
+
