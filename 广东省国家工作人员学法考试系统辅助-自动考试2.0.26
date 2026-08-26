@@ -1,0 +1,1180 @@
+// ==UserScript==
+// @name         广东省国家工作人员学法考试系统辅助-自动考试
+// @namespace    https://greasyfork.org.cn/
+// @version      2.0.26
+// @description  广东省国家工作人员学法考试系统辅助学习
+// @author       DuoMx
+// @match        http*://xfks-study.gdsf.gov.cn/study/*
+// @icon         http://xfks-study.gdsf.gov.cn/study/static/images/favicon.ico?v2019031285
+// @license      GPLv3
+// @run-at       document-start
+// @require      https://code.jquery.com/jquery-2.2.4.min.js
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_notification
+// @grant        GM_registerMenuCommand
+// @downloadURL https://update.greasyfork.org.cn/scripts/470663/%E5%B9%BF%E4%B8%9C%E7%9C%81%E5%9B%BD%E5%AE%B6%E5%B7%A5%E4%BD%9C%E4%BA%BA%E5%91%98%E5%AD%A6%E6%B3%95%E8%80%83%E8%AF%95%E7%B3%BB%E7%BB%9F%E8%BE%85%E5%8A%A9-%E8%87%AA%E5%8A%A8%E8%80%83%E8%AF%95.user.js
+// @updateURL https://update.greasyfork.org.cn/scripts/470663/%E5%B9%BF%E4%B8%9C%E7%9C%81%E5%9B%BD%E5%AE%B6%E5%B7%A5%E4%BD%9C%E4%BA%BA%E5%91%98%E5%AD%A6%E6%B3%95%E8%80%83%E8%AF%95%E7%B3%BB%E7%BB%9F%E8%BE%85%E5%8A%A9-%E8%87%AA%E5%8A%A8%E8%80%83%E8%AF%95.meta.js
+// ==/UserScript==
+
+this.$ = this.jQuery = jQuery.noConflict(true);
+
+(function() {
+    'use strict';
+
+    // ===== 彻底屏蔽"离开此网站"原生弹框 =====
+    // 浏览器原生 beforeunload 弹框无法被脚本自动点击，只能从源头阻止其注册
+    (function blockLeaveDialog() {
+        // 1) 拦截 EventTarget 原型上的 addEventListener（覆盖 window/document 等所有对象）
+        var _etAdd = EventTarget.prototype.addEventListener;
+        EventTarget.prototype.addEventListener = function(type, listener, options) {
+            if (type === 'beforeunload' || type === 'unload') {
+                return; // 直接丢弃，不注册
+            }
+            return _etAdd.apply(this, arguments);
+        };
+        // 2) 重定义 window/document 的 onbeforeunload 属性，赋值无效且永远返回 null
+        [window, document].forEach(function(obj) {
+            try {
+                delete obj.onbeforeunload;
+                Object.defineProperty(obj, 'onbeforeunload', {
+                    set: function() {},
+                    get: function() { return null; },
+                    configurable: true
+                });
+            } catch (e) {}
+        });
+        // 3) 兜底：周期性清空（防止某些框架动态重新赋值）
+        setInterval(function() {
+            try { window.onbeforeunload = null; document.onbeforeunload = null; } catch (e) {}
+        }, 300);
+    })();
+
+    // 默认配置
+    var defaultConfig = {
+        delayTime: 10,
+        maxChapters: 0, // 0表示全部章节
+        maxExercises: 0, // 0表示全部练习
+        autoStart: false
+    };
+
+    // 默认答案
+    var defaultAnswerTitlejson = {};
+
+    var answerjson = {};
+    var answerTitlejson = {};
+    var fullurl = window.location.href;
+
+    // 设置默认密码
+    $("[name='password']").val("xfks1234");
+
+    // 完整的答案数据（这里只保留部分作为示例）
+    var totalAnswer = { };
+
+    var courseList = [];
+    var chapterList = [];
+    var exerciseList = [];
+    var courseCount = 0;
+    var chapterCount = 0;
+    var exerciseCount = 0;
+
+    // 使用GM存储来持久化状态变量
+    var isLearning = GM_getValue("isLearning", false);
+    var isExercising = GM_getValue("isExercising", false);
+    var isOneKeyLearning = GM_getValue("isOneKeyLearning", false);
+    var currentChapterIndex = GM_getValue("currentChapterIndex", 0);
+    var currentExerciseIndex = GM_getValue("currentExerciseIndex", 0);
+    var totalChapters = GM_getValue("totalChapters", 0);
+    var totalExercises = GM_getValue("totalExercises", 0);
+
+    // 初始化配置
+    function initConfig() {
+        var config = GM_getValue("config", null);
+        if (!config) {
+            config = defaultConfig;
+            GM_setValue("config", config);
+        }
+        return config;
+    }
+
+    // 保存配置
+    function saveConfig(config) {
+        GM_setValue("config", config);
+    }
+
+    // 保存状态变量
+    function saveState() {
+        GM_setValue("isLearning", isLearning);
+        GM_setValue("isExercising", isExercising);
+        GM_setValue("isOneKeyLearning", isOneKeyLearning);
+        GM_setValue("currentChapterIndex", currentChapterIndex);
+        GM_setValue("currentExerciseIndex", currentExerciseIndex);
+        GM_setValue("totalChapters", totalChapters);
+        GM_setValue("totalExercises", totalExercises);
+    }
+
+    // 获取题库数量
+    function getQuestionBankCount() {
+        var answerTitlejson = GM_getValue("AnswerForTitle", defaultAnswerTitlejson);
+        var count = 0;
+        for (var key in answerTitlejson) {
+            if (answerTitlejson.hasOwnProperty(key)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // 创建配置界面
+    function createConfigPanel() {
+        var config = initConfig();
+
+        // 创建浮动面板
+        var panel = $('<div id="xuefa-config-panel" style="position: fixed; top: 50px; right: 20px; width: 350px; background: white; border: 2px solid #4CAF50; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); z-index: 10000; font-family: Arial, sans-serif; display: none;">');
+
+        var header = $('<div style="background: #4CAF50; color: white; padding: 10px; border-radius: 8px 8px 0 0; cursor: move; font-weight: bold; text-align: center;">学习配置面板</div>');
+        var content = $('<div style="padding: 15px;">');
+
+        // 学习间隔配置
+        content.append('<label style="display: block; margin-bottom: 5px; font-weight: bold;">学习间隔(毫秒):</label>');
+        var delayInput = $('<input type="number" min="100" max="60000" step="100" style="width: 100%; padding: 5px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px;">').val(config.delayTime);
+        content.append(delayInput);
+
+        // 最大章节数配置
+        content.append('<label style="display: block; margin-bottom: 5px; font-weight: bold;">最大章节数(0=全部):</label>');
+        var chaptersInput = $('<input type="number" min="0" max="100" style="width: 100%; padding: 5px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px;">').val(config.maxChapters);
+        content.append(chaptersInput);
+
+        // 最大练习数配置
+        content.append('<label style="display: block; margin-bottom: 5px; font-weight: bold;">最大练习数(0=全部):</label>');
+        var exercisesInput = $('<input type="number" min="0" max="100" style="width: 100%; padding: 5px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px;">').val(config.maxExercises);
+        content.append(exercisesInput);
+
+        // 进度显示区域
+        var progressArea = $('<div id="xuefa-progress-area" style="margin: 15px 0; padding: 10px; background: #f9f9f9; border-radius: 5px; border: 1px solid #e0e0e0;">');
+
+        // 题库数量显示
+        var questionBankCount = getQuestionBankCount();
+        var questionBankHtml = `
+            <div style="margin-bottom: 10px; padding: 8px; background: #E3F2FD; border-radius: 5px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: bold; color: #1976D2;">题库数量:</span>
+                    <span id="question-bank-count" style="font-weight: bold; color: #1976D2; font-size: 16px;">${questionBankCount}</span>
+                </div>
+                <div style="font-size: 11px; color: #666; margin-top: 5px;">题目-答案对应关系数量</div>
+            </div>
+        `;
+
+        // 章节进度
+        var chapterProgressHtml = `
+            <div style="margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span style="font-weight: bold;">章节进度:</span>
+                    <span id="chapter-progress-text">${currentChapterIndex}/${totalChapters}</span>
+                </div>
+                <div style="width: 100%; height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden;">
+                    <div id="chapter-progress-bar" style="height: 100%; background: #4CAF50; width: ${totalChapters > 0 ? (currentChapterIndex / totalChapters * 100).toFixed(1) : 0}%; transition: width 0.3s; text-align: center; color: white; font-size: 12px; line-height: 20px;">${totalChapters > 0 ? (currentChapterIndex / totalChapters * 100).toFixed(1) : 0}%</div>
+                </div>
+            </div>
+        `;
+
+        // 练习进度
+        var exerciseProgressHtml = `
+            <div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span style="font-weight: bold;">练习进度:</span>
+                    <span id="exercise-progress-text">${currentExerciseIndex}/${totalExercises}</span>
+                </div>
+                <div style="width: 100%; height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden;">
+                    <div id="exercise-progress-bar" style="height: 100%; background: #2196F3; width: ${totalExercises > 0 ? (currentExerciseIndex / totalExercises * 100).toFixed(1) : 0}%; transition: width 0.3s; text-align: center; color: white; font-size: 12px; line-height: 20px;">${totalExercises > 0 ? (currentExerciseIndex / totalExercises * 100).toFixed(1) : 0}%</div>
+                </div>
+            </div>
+        `;
+
+        progressArea.append(questionBankHtml).append(chapterProgressHtml).append(exerciseProgressHtml);
+        content.append(progressArea);
+
+        // 按钮区域
+        var buttonArea = $('<div style="display: flex; flex-direction: column; gap: 8px; margin-top: 15px;">');
+
+        // 一键学习+练习按钮
+        var oneKeyBtn = $('<button id="one-key-btn" style="background: #FF5722; color: white; border: none; padding: 10px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 10px; font-weight: bold; width: 80%;">一键学习+练习</button>');
+        var pauseOneKeyBtn = $('<button id="pause-one-key-btn" style="background: #FF9800; color: white; border: none; padding: 10px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 10px; display: none; font-weight: bold; width: 80%;">暂停一键学习</button>');
+        var stopOneKeyBtn = $('<button id="stop-one-key-btn" style="background: #f44336; color: white; border: none; padding: 10px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 10px; display: none; font-weight: bold; width: 80%;">停止一键学习</button>');
+
+        // 学习章节按钮
+        var startLearnBtn = $('<button id="start-learn-btn" style="background: #4CAF50; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px;">开始学习章节</button>');
+        var pauseLearnBtn = $('<button id="pause-learn-btn" style="background: #FF9800; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px; display: none;">暂停学习</button>');
+        var stopLearnBtn = $('<button id="stop-learn-btn" style="background: #f44336; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px; display: none;">停止学习</button>');
+
+        // 练习按钮
+        var startExerciseBtn = $('<button id="start-exercise-btn" style="background: #2196F3; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px;">开始练习</button>');
+        var pauseExerciseBtn = $('<button id="pause-exercise-btn" style="background: #FF9800; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px; display: none;">暂停练习</button>');
+        var stopExerciseBtn = $('<button id="stop-exercise-btn" style="background: #f44336; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px; display: none;">停止练习</button>');
+
+        // 通用按钮
+        var saveBtn = $('<button style="background: #9C27B0; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px;">保存配置</button>');
+        var closeBtn = $('<button style="background: #9E9E9E; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px;">关闭</button>');
+        var refreshQuestionBankBtn = $('<button id="refresh-question-bank-btn" style="background: #FF9800; color: white; border: none; padding: 8px 16px; margin: 0 5px; border-radius: 4px; cursor: pointer; margin-bottom: 5px;">刷新题库</button>');
+
+        buttonArea.append(oneKeyBtn).append(pauseOneKeyBtn).append(stopOneKeyBtn)
+                 .append($('<div style="margin: 10px 0; border-top: 1px dashed #ccc;"></div>'))
+                 .append(startLearnBtn).append(pauseLearnBtn).append(stopLearnBtn)
+                 .append($('<div style="margin: 10px 0; border-top: 1px dashed #ccc;"></div>'))
+                 .append(startExerciseBtn).append(pauseExerciseBtn).append(stopExerciseBtn)
+                 .append($('<div style="margin: 10px 0; border-top: 1px dashed #ccc;"></div>'))
+                 .append(saveBtn).append(refreshQuestionBankBtn).append(closeBtn);
+        content.append(buttonArea);
+
+        // 状态显示
+        var statusDiv = $('<div id="xuefa-status" style="margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 12px; display: none;"></div>');
+        content.append(statusDiv);
+
+        panel.append(header).append(content);
+        $('body').append(panel);
+
+        // 让面板内所有按钮铺满且不溢出
+        $('#xuefa-config-panel button').css({
+            'width': '100%',
+            'box-sizing': 'border-box',
+            'margin': '0'
+        });
+
+        // 创建悬浮按钮
+        var floatBtn = $('<div id="xuefa-float-btn" style="position: fixed; top: 20px; right: 20px; width: 50px; height: 50px; background: #4CAF50; color: white; border-radius: 50%; text-align: center; line-height: 50px; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.3); z-index: 9999; font-weight: bold; font-size: 20px;">学</div>');
+        $('body').append(floatBtn);
+
+        // 初始化按钮状态
+        updateLearnButtonState();
+        updateExerciseButtonState();
+        updateOneKeyButtonState();
+
+        // 事件绑定
+        floatBtn.click(function() {
+            panel.toggle();
+            updateProgressDisplay();
+            updateQuestionBankCount();
+        });
+
+        oneKeyBtn.click(function() {
+            if (!isOneKeyLearning) {
+                startOneKeyLearning();
+            } else {
+                updateStatus("一键学习正在进行中...");
+            }
+        });
+
+        pauseOneKeyBtn.click(function() {
+            pauseOneKeyLearning();
+        });
+
+        stopOneKeyBtn.click(function() {
+            stopOneKeyLearning();
+        });
+
+        startLearnBtn.click(function() {
+            if (!isLearning) {
+                startLearning();
+            } else {
+                updateStatus("学习正在进行中...");
+            }
+        });
+
+        pauseLearnBtn.click(function() {
+            pauseLearning();
+        });
+
+        stopLearnBtn.click(function() {
+            stopLearning();
+        });
+
+        startExerciseBtn.click(function() {
+            if (!isExercising) {
+                startExercising();
+            } else {
+                updateStatus("练习正在进行中...");
+            }
+        });
+
+        pauseExerciseBtn.click(function() {
+            pauseExercising();
+        });
+
+        stopExerciseBtn.click(function() {
+            stopExercising();
+        });
+
+        saveBtn.click(function() {
+            var newConfig = {
+                delayTime: parseInt(delayInput.val()),
+                maxChapters: parseInt(chaptersInput.val()),
+                maxExercises: parseInt(exercisesInput.val()),
+                autoStart: false // 固定为false，不再使用自动开始
+            };
+            saveConfig(newConfig);
+            updateStatus("配置已保存!");
+        });
+
+        refreshQuestionBankBtn.click(function() {
+            updateQuestionBankCount();
+            updateStatus("题库数量已刷新!");
+        });
+
+        closeBtn.click(function() {
+            panel.hide();
+        });
+
+        // 拖拽功能
+        var isDragging = false;
+        var dragOffset = {x: 0, y: 0};
+
+        header.mousedown(function(e) {
+            isDragging = true;
+            var offset = panel.offset();
+            dragOffset.x = e.clientX - offset.left;
+            dragOffset.y = e.clientY - offset.top;
+            return false;
+        });
+
+        $(document).mousemove(function(e) {
+            if (isDragging) {
+                panel.css({
+                    left: (e.clientX - dragOffset.x) + 'px',
+                    top: (e.clientY - dragOffset.y) + 'px'
+                });
+            }
+        });
+
+        $(document).mouseup(function() {
+            isDragging = false;
+        });
+    }
+
+    // 更新题库数量显示
+    function updateQuestionBankCount() {
+        var count = getQuestionBankCount();
+        $('#question-bank-count').text(count);
+    }
+
+    // 练习页面悬浮显示：题库数量 + 当前练习进度
+    function createExerciseHUD() {
+        if ($('#xuefa-exercise-hud').length > 0) return;
+        var hud = $('<div id="xuefa-exercise-hud" style="position: fixed; left: 20px; top: 20px; z-index: 10001; background: rgba(33,150,243,0.95); color: #fff; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-family: Arial, sans-serif; font-size: 13px; line-height: 1.7; min-width: 170px;">');
+        hud.append('<div style="font-weight:bold; margin-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.4); padding-bottom:4px;">练习进度</div>');
+        hud.append('<div>题库数量：<span id="hud-qb-count" style="font-weight:bold;">0</span></div>');
+        hud.append('<div>完成进度：<span id="hud-ex-progress" style="font-weight:bold;">0 / 0</span></div>');
+        hud.append('<div style="height:8px; background:rgba(255,255,255,0.3); border-radius:4px; margin-top:6px; overflow:hidden;"><div id="hud-ex-bar" style="height:100%; width:0%; background:#fff; transition:width 0.3s;"></div></div>');
+        $('body').append(hud);
+        updateExerciseHUD();
+    }
+
+    function updateExerciseHUD() {
+        var hud = $('#xuefa-exercise-hud');
+        if (hud.length === 0) return;
+        var count = getQuestionBankCount();
+        var exList = GM_getValue('exerciseList', []);
+        var total = exList ? exList.length : 0;
+        var cur = GM_getValue('currentExerciseIndex', 0);
+        var shownCur = total > 0 ? Math.min(cur + 1, total) : 0;
+        $('#hud-qb-count').text(count);
+        $('#hud-ex-progress').text(shownCur + ' / ' + total);
+        var pct = total > 0 ? (shownCur / total * 100).toFixed(1) : 0;
+        $('#hud-ex-bar').css('width', pct + '%');
+    }
+
+    // 在考试/练习界面上勾选已找到答案的选项（answer 形如 A / AB / ABCD / V / X）
+    function selectAnswerInUI(qitem, answer) {
+        qitem.find("input[type='radio'], input[type='checkbox']").each(function() {
+            var v = $(this).val();
+            if (answer.indexOf(v) >= 0) {
+                $(this).prop("checked", true);
+                try {
+                    this.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch (e) {}
+            }
+        });
+        // 标记已成功选中（浅绿底），区别于未找到答案的灰色
+        qitem.css("background", "#e8f5e9");
+    }
+
+    // 更新进度显示
+    function updateProgressDisplay() {
+        var chapterProgress = totalChapters > 0 ? (currentChapterIndex / totalChapters * 100).toFixed(1) : 0;
+        var exerciseProgress = totalExercises > 0 ? (currentExerciseIndex / totalExercises * 100).toFixed(1) : 0;
+
+        $('#chapter-progress-bar').css('width', chapterProgress + '%').text(chapterProgress + '%');
+        $('#chapter-progress-text').text(currentChapterIndex + '/' + totalChapters);
+
+        $('#exercise-progress-bar').css('width', exerciseProgress + '%').text(exerciseProgress + '%');
+        $('#exercise-progress-text').text(currentExerciseIndex + '/' + totalExercises);
+
+        // 保存状态
+        saveState();
+
+        // 更新题库数量
+        updateQuestionBankCount();
+    }
+
+    // 更新状态显示
+    function updateStatus(message) {
+        var statusDiv = $('#xuefa-status');
+        statusDiv.text(message).show();
+        setTimeout(function() {
+            statusDiv.fadeOut();
+        }, 200);
+    }
+
+    // 开始一键学习+练习
+    function startOneKeyLearning() {
+        $('#xuefa-config-panel').show();
+        if (isOneKeyLearning || isLearning || isExercising) {
+            updateStatus("已有任务正在进行中...");
+            return;
+        }
+        isOneKeyLearning = true;
+        saveState();
+        updateOneKeyButtonState();
+        updateStatus("开始一键学习+练习...");
+
+        // 重置进度
+        currentChapterIndex = 0;
+        currentExerciseIndex = 0;
+        saveState();
+
+        var config = initConfig();
+        GM_setValue("delaytime", config.delayTime);
+
+        // 检测课程列表
+        FindCourseList();
+
+        // 根据配置限制章节和练习数量
+        if (config.maxChapters > 0 && chapterList.length > config.maxChapters) {
+            chapterList = chapterList.slice(0, config.maxChapters);
+        }
+        if (config.maxExercises > 0 && exerciseList.length > config.maxExercises) {
+            exerciseList = exerciseList.slice(0, config.maxExercises);
+        }
+
+        totalChapters = chapterList.length;
+        totalExercises = exerciseList.length;
+        saveState();
+
+        updateProgressDisplay();
+        updateStatus(`开始一键学习 ${totalChapters} 个章节和 ${totalExercises} 份练习题`);
+
+        // 开始学习章节
+        isLearning = true;
+        saveState();
+        updateLearnButtonState();
+
+        StartLearnAll();
+    }
+
+    // 暂停一键学习
+    function pauseOneKeyLearning() {
+        isOneKeyLearning = false;
+        isLearning = false;
+        isExercising = false;
+        saveState();
+        updateOneKeyButtonState();
+        updateLearnButtonState();
+        updateExerciseButtonState();
+        updateStatus("一键学习已暂停");
+    }
+
+    // 停止一键学习
+    function stopOneKeyLearning() {
+        isOneKeyLearning = false;
+        isLearning = false;
+        isExercising = false;
+        currentChapterIndex = 0;
+        currentExerciseIndex = 0;
+        saveState();
+        updateOneKeyButtonState();
+        updateLearnButtonState();
+        updateExerciseButtonState();
+        updateProgressDisplay();
+        updateStatus("一键学习已停止");
+    }
+
+    // 开始学习章节
+    function startLearning() {
+        $('#xuefa-config-panel').show();
+        if (isLearning) {
+            updateStatus("学习正在进行中...");
+            return;
+        }
+
+        isLearning = true;
+        saveState();
+        updateLearnButtonState();
+        updateStatus("开始检测课程...");
+
+        // 重置进度
+        currentChapterIndex = 0;
+        saveState();
+
+        var config = initConfig();
+        GM_setValue("delaytime", config.delayTime);
+
+        // 检测课程列表
+        FindCourseList();
+
+        // 根据配置限制章节数量
+        if (config.maxChapters > 0 && chapterList.length > config.maxChapters) {
+            chapterList = chapterList.slice(0, config.maxChapters);
+        }
+
+        totalChapters = chapterList.length;
+        saveState();
+
+        updateProgressDisplay();
+        updateStatus(`开始学习 ${totalChapters} 个章节`);
+
+        // 开始学习章节
+        StartLearnAll();
+    }
+
+    // 暂停学习
+    function pauseLearning() {
+        isLearning = false;
+        saveState();
+        updateLearnButtonState();
+        updateStatus("学习已暂停");
+    }
+
+    // 停止学习
+    function stopLearning() {
+        isLearning = false;
+        currentChapterIndex = 0;
+        saveState();
+        updateLearnButtonState();
+        updateProgressDisplay();
+        updateStatus("学习已停止");
+    }
+
+    // 开始练习
+    function startExercising() {
+        $('#xuefa-config-panel').show();
+        if (isExercising) {
+            updateStatus("练习正在进行中...");
+            return;
+        }
+
+        isExercising = true;
+        saveState();
+        updateExerciseButtonState();
+        updateStatus("开始检测练习题...");
+
+        // 重置进度
+        currentExerciseIndex = 0;
+        saveState();
+
+        var config = initConfig();
+
+        // 检测课程列表
+        FindCourseList();
+
+        // 根据配置限制练习数量
+        if (config.maxExercises > 0 && exerciseList.length > config.maxExercises) {
+            exerciseList = exerciseList.slice(0, config.maxExercises);
+        }
+
+        totalExercises = exerciseList.length;
+        saveState();
+
+        updateProgressDisplay();
+        updateStatus(`开始练习 ${totalExercises} 份练习题`);
+
+        // 开始练习
+        StartExercise();
+    }
+
+    // 暂停练习
+    function pauseExercising() {
+        isExercising = false;
+        saveState();
+        updateExerciseButtonState();
+        updateStatus("练习已暂停");
+    }
+
+    // 停止练习
+    function stopExercising() {
+        isExercising = false;
+        currentExerciseIndex = 0;
+        saveState();
+        updateExerciseButtonState();
+        updateProgressDisplay();
+        updateStatus("练习已停止");
+    }
+
+    // 更新一键学习按钮状态
+    function updateOneKeyButtonState() {
+        if (isOneKeyLearning) {
+            $('#one-key-btn').hide();
+            $('#pause-one-key-btn').show();
+            $('#stop-one-key-btn').show();
+        } else {
+            $('#one-key-btn').show();
+            $('#pause-one-key-btn').hide();
+            $('#stop-one-key-btn').hide();
+        }
+    }
+
+    // 更新学习按钮状态
+    function updateLearnButtonState() {
+        if (isLearning) {
+            $('#start-learn-btn').hide();
+            $('#pause-learn-btn').show();
+            $('#stop-learn-btn').show();
+        } else {
+            $('#start-learn-btn').show();
+            $('#pause-learn-btn').hide();
+            $('#stop-learn-btn').hide();
+        }
+    }
+
+    // 更新练习按钮状态
+    function updateExerciseButtonState() {
+        if (isExercising) {
+            $('#start-exercise-btn').hide();
+            $('#pause-exercise-btn').show();
+            $('#stop-exercise-btn').show();
+        } else {
+            $('#start-exercise-btn').show();
+            $('#pause-exercise-btn').hide();
+            $('#stop-exercise-btn').hide();
+        }
+    }
+
+    // 检测课程列表
+    function FindCourseList() {
+        var indexdom;
+        $.ajax({
+            type: "get",
+            url: "https://xfks-study.gdsf.gov.cn/study/index",
+            data: null,
+            async: false,
+            success: function(data) {
+                indexdom = $(data).find("#pre");
+            }
+        });
+
+        updateStatus("开始检测课程");
+        console.log("开始检测课程");
+        courseList = [];
+        chapterList = [];
+        exerciseList = [];
+        courseCount = 0;
+        chapterCount = 0;
+        exerciseCount = 0;
+
+        indexdom.find(".card.current").each(function() {
+            courseList.push($(this).children("h3").children("a").attr("href"));
+            courseCount++;
+        });
+        console.log("检测到" + courseCount + "个课程");
+        console.log("开始检测章节及练习题");
+        for (let i = 0; i < courseList.length; i++) {
+            var percentnum = ((i + 1) / courseList.length * 100).toFixed(0);
+            FindChapterList(courseList[i]);
+        }
+        updateStatus("检测到" + chapterCount + "个章节," + exerciseCount + "份练习题");
+        console.log("检测到" + chapterCount + "个章节," + exerciseCount + "份练习题。");
+        GM_setValue("chapterList", chapterList);
+        GM_setValue("exerciseList", exerciseList);
+    }
+
+    function FindChapterList(courseUrl) {
+        var chaptersdom;
+        var rootdom;
+        $.ajax({
+            type: "get",
+            url: courseUrl,
+            data: null,
+            async: false,
+            success: function(data) {
+                rootdom = $(data);
+                chaptersdom = $(data).find("#chapter-none");
+            }
+        });
+        chaptersdom.children("li").each(function() {
+            if ($(this).find("a").attr("href").indexOf("study/course") > 0) {
+                chapterList.push("https://xfks-study.gdsf.gov.cn" + $(this).find("a").attr("href"));
+                chapterCount++;
+            }
+        })
+        rootdom.find("td.title").find("a[onclick]").each(function() {
+            var onclickString = $(this).attr("onclick");
+            var courseIdString = onclickString.split(',')[0].split('(')[1];
+            var chapterIdString = onclickString.split(',')[1].split(')')[0];
+            exerciseList.push({
+                'courseId': courseIdString,
+                'chapterId': chapterIdString
+            });
+            exerciseCount++;
+        });
+    }
+
+    function StartLearnAll() {
+        var chapterList = GM_getValue("chapterList", null);
+        var config = initConfig();
+
+        function learnNextChapter() {
+            if (!isLearning || currentChapterIndex >= chapterList.length) {
+                if (isLearning) {
+                    updateStatus("章节学习完成!");
+                    isLearning = false;
+                    saveState();
+                    updateLearnButtonState();
+
+                    // 如果是一键学习模式，自动开始练习
+                    if (isOneKeyLearning) {
+                        updateStatus("章节学习完成，开始练习...");
+                        isExercising = true;
+                        saveState();
+                        updateExerciseButtonState();
+                        StartExercise();
+                    }
+                }
+                return;
+            }
+
+            // 如果设置了最大章节数并且已经达到，则停止
+            if (config.maxChapters > 0 && currentChapterIndex >= config.maxChapters) {
+                updateStatus("已达到最大章节数");
+                isLearning = false;
+                saveState();
+                updateLearnButtonState();
+
+                // 如果是一键学习模式，自动开始练习
+                if (isOneKeyLearning) {
+                    updateStatus("已达到最大章节数，开始练习...");
+                    isExercising = true;
+                    saveState();
+                    updateExerciseButtonState();
+                    StartExercise();
+                }
+                return;
+            }
+
+            var chapterUrl = chapterList[currentChapterIndex];
+            var getchaptersuccess = getChapterContent(chapterUrl);
+            if (getchaptersuccess) {
+                var indexchapter = chapterUrl.indexOf("chapter");
+                var chapternum = chapterUrl.substring(indexchapter + 8);
+                console.log('获取章节：' + chapternum + '成功，进度：' + (currentChapterIndex + 1) + "/" + chapterList.length);
+
+                var delaytimenum = Math.round(Math.random() * 10);
+                var delaytime = GM_getValue("delaytime", config.delayTime);
+
+                setTimeout(function() {
+                    submitLearn(chapternum);
+                    currentChapterIndex++;
+                    saveState();
+                    updateProgressDisplay();
+                    updateStatus(`学习进度: ${currentChapterIndex}/${chapterList.length} 章节`);
+
+                    // 学习下一个章节
+                    learnNextChapter();
+                }, delaytimenum * delaytime);
+            } else {
+                // 如果获取章节内容失败，跳过这个章节
+                currentChapterIndex++;
+                saveState();
+                learnNextChapter();
+            }
+        }
+
+        // 开始学习第一个章节
+        learnNextChapter();
+    }
+
+    function StartExercise() {
+        var exerciseList = GM_getValue("exerciseList", null);
+        var config = initConfig();
+
+        // 如果设置了最大练习数，则只做指定数量的练习
+        if (config.maxExercises > 0 && exerciseList.length > config.maxExercises) {
+            exerciseList = exerciseList.slice(0, config.maxExercises);
+        }
+
+        if (exerciseList.length > 0 && isExercising) {
+            currentExerciseIndex = 0;
+            saveState();
+            updateProgressDisplay();
+            // 开始第一个练习
+            exerciseBuild(exerciseList[0]['courseId'], exerciseList[0]['chapterId']);
+        } else {
+            updateStatus("没有找到练习题!");
+            isExercising = false;
+            if (isOneKeyLearning) {
+                isOneKeyLearning = false;
+                updateStatus("一键学习+练习完成!");
+            }
+            saveState();
+            updateExerciseButtonState();
+            updateOneKeyButtonState();
+        }
+    }
+
+    // 跳转到下一个练习
+    function goToNextExercise() {
+        // 从存储中重新获取状态，确保是最新的
+        isExercising = GM_getValue("isExercising", false);
+        isOneKeyLearning = GM_getValue("isOneKeyLearning", false);
+
+        if (!isExercising) {
+            return;
+        }
+
+        var exerciseList = GM_getValue("exerciseList", null);
+        var config = initConfig();
+
+        currentExerciseIndex++;
+        saveState();
+        updateProgressDisplay();
+        updateExerciseHUD();
+
+        // 如果设置了最大练习数并且已经达到，则停止
+        if (config.maxExercises > 0 && currentExerciseIndex >= config.maxExercises) {
+            updateStatus("已达到最大练习数");
+            isExercising = false;
+            if (isOneKeyLearning) {
+                isOneKeyLearning = false;
+                updateStatus("一键学习+练习完成!");
+            }
+            saveState();
+            updateExerciseButtonState();
+            updateOneKeyButtonState();
+            window.location.href = "https://xfks-study.gdsf.gov.cn/study/statistics";
+            return;
+        }
+
+        window.onbeforeunload = null;
+
+        if (currentExerciseIndex < exerciseList.length) {
+            updateStatus(`准备下一个练习: ${currentExerciseIndex + 1}/${exerciseList.length}`);
+            // 延迟一段时间后开始下一个练习
+            setTimeout(function() {
+                exerciseBuild(exerciseList[currentExerciseIndex]['courseId'], exerciseList[currentExerciseIndex]['chapterId']);
+            }, 500);
+        } else {
+            updateStatus("所有练习已完成!");
+            isExercising = false;
+            if (isOneKeyLearning) {
+                isOneKeyLearning = false;
+                updateStatus("一键学习+练习完成!");
+            }
+            saveState();
+            updateExerciseButtonState();
+            updateOneKeyButtonState();
+        }
+    }
+
+    // 其他原有函数保持不变...
+    function getChapterContent(chapterUrl) {
+        var result = false;
+        $.ajax({
+            type: "get",
+            url: chapterUrl,
+            data: null,
+            async: false,
+            success: function(data) {
+                result = true;
+            }
+        });
+        return result;
+    }
+
+    function submitLearn(chapterNum) {
+        $.ajax({
+            type: "post",
+            url: "/study/learn/" + chapterNum,
+            data: null,
+            async: false,
+            success: function(data) {
+                //console.log("章节:"+chapterNum+"学习完毕");
+            }
+        });
+    }
+
+    function exerciseBuild(courseId, chapterId) {
+        jQuery.ajax({
+            url: "/study/exerciseBuild/" + courseId + "/chapter/" + chapterId,
+            method: "post",
+            data: null,
+            success: function(data) {
+                window.location.href = "/study/exercise/" + data;
+            },
+            error: function(data) {
+                if (data.status == 400) {
+                    alert(data.responseText);
+                } else {
+                    alert("创建失败");
+                }
+                // 练习创建失败，继续下一个练习
+                goToNextExercise();
+            }
+        })
+    }
+
+    // 自动处理离开页面确认对话框
+    function autoHandleLeaveDialog() {
+        // 重写确认对话框
+        window.onbeforeunload = null;
+
+        // 尝试直接覆盖确认函数
+        if (window.confirm) {
+            var originalConfirm = window.confirm;
+            window.confirm = function(message) {
+                if (message && message.indexOf("离开此网站") >= 0) {
+                    console.log("自动确认离开页面对话框");
+                    return true;
+                }
+                return originalConfirm.apply(this, arguments);
+            };
+        }
+
+        // 监听可能出现的确认对话框
+        $(document).on('click', 'button, a', function() {
+            // 如果点击了可能触发离开确认的元素，预先处理
+            setTimeout(function() {
+                window.onbeforeunload = null;
+            }, 100);
+        });
+
+        // 定期清除onbeforeunload
+        setInterval(function() {
+            window.onbeforeunload = null;
+        }, 500);
+    }
+
+    function sleep(delay) {
+        var start = (new Date()).getTime();
+        while ((new Date()).getTime() - start < delay) {
+            continue;
+        }
+    }
+
+    // 注册菜单命令
+    GM_registerMenuCommand("打开学习配置", function() {
+        $('#xuefa-config-panel').show();
+        updateProgressDisplay();
+    });
+
+    GM_registerMenuCommand("一键学习+练习", function() {
+        startOneKeyLearning();
+    });
+
+    GM_registerMenuCommand("开始学习章节", function() {
+        startLearning();
+    });
+
+    GM_registerMenuCommand("开始练习", function() {
+        startExercising();
+    });
+
+    // 初始化
+    $(document).ready(function() {
+        createConfigPanel();
+
+        // 恢复学习状态
+        var savedChapterList = GM_getValue("chapterList", []);
+        var savedExerciseList = GM_getValue("exerciseList", []);
+        if (savedChapterList.length > 0) {
+            totalChapters = savedChapterList.length;
+        }
+        if (savedExerciseList.length > 0) {
+            totalExercises = savedExerciseList.length;
+        }
+        updateProgressDisplay();
+
+        // 练习页面逻辑
+        if (fullurl.indexOf("exercise") > 0) {
+            // 从存储中获取状态
+            isExercising = GM_getValue("isExercising", false);
+            isOneKeyLearning = GM_getValue("isOneKeyLearning", false);
+
+            // 设置自动处理离开页面对话框
+            autoHandleLeaveDialog();
+
+            // 练习页面显示题库数量与进度悬浮窗
+            createExerciseHUD();
+
+            var exerciseList = GM_getValue("exerciseList", null);
+            var exercisenum = fullurl.substring(fullurl.indexOf("exercise") + 9);
+            var xuefaexerciseurl = "/study/submitExercise/" + exercisenum;
+            answerjson = {};
+            answerTitlejson = GM_getValue("AnswerForTitle", defaultAnswerTitlejson);
+
+            // 更新当前练习索引
+            for (var i = 0; i < exerciseList.length; i++) {
+                if (exercisenum == exerciseList[i]['chapterId']) {
+                    currentExerciseIndex = i;
+                    saveState();
+                    updateExerciseHUD();
+                    break;
+                }
+            }
+
+            $(".item").each(function() {
+                var qid = $(this).attr("qid");
+                var answer = $(this).find(".answer").attr("val");
+                var answerTitleTempStr = $(this).find(".question-title").html();
+                var subStartIndex = answerTitleTempStr.indexOf(".");
+                var subEndIndex = answerTitleTempStr.indexOf("<label");
+                var answerTitleStr = answerTitleTempStr.substring(subStartIndex, subEndIndex).replace(/\s+/g, "");
+                answerjson[qid] = answer;
+                answerTitlejson[answerTitleStr] = answer;
+            });
+            GM_setValue("AnswerForTitle", answerTitlejson);
+
+            // 更新题库数量显示
+            updateQuestionBankCount();
+
+            var config = initConfig();
+            var delaytimenum = Math.round(Math.random() * 80 + 20);
+            var delaytime = config.delayTime;
+
+            // 更新进度显示
+            updateProgressDisplay();
+
+            // 只有处于练习状态时才自动提交
+            if (isExercising) {
+                // 自动提交练习
+                setTimeout(function() {
+                    $.ajax({
+                        type: "post",
+                        url: xuefaexerciseurl,
+                        data: answerjson,
+                        async: false,
+                        success: function(data) {
+                            if (data.toString().indexOf('满分') > 0) {
+                                updateStatus("练习提交成功，准备下一个练习");
+                                // 更新题库数量
+                                updateQuestionBankCount();
+                                updateExerciseHUD();
+                                // 自动跳转到下一个练习
+                                setTimeout(function() {
+                                    goToNextExercise();
+                                }, 500);
+                            } else {
+                                updateStatus("练习提交完成");
+                                // 更新题库数量
+                                updateQuestionBankCount();
+                                updateExerciseHUD();
+                                // 即使不是满分也继续下一个练习
+                                setTimeout(function() {
+                                    goToNextExercise();
+                                }, 500);
+                            }
+                        },
+                        error: function() {
+                            updateStatus("练习提交失败");
+                            // 即使失败也继续下一个练习
+                            setTimeout(function() {
+                                goToNextExercise();
+                            }, 500);
+                        }
+                    });
+                }, delaytimenum * delaytime);
+            }
+        }
+
+        // 原有的考试页面逻辑保持不变
+        if (fullurl.indexOf("exams") > 0) {
+            // ... 原有考试页面逻辑
+            var examnum = fullurl.substring(fullurl.indexOf("exams") + 6);
+            var examurl = "/study/exams/" + examnum;
+            var saveexamurl = "/study/saveAnswer/" + examnum;
+            var allanserhasfind = false;
+            answerjson = {};
+            answerTitlejson = GM_getValue("AnswerForTitle", {});
+            var answerCount = 0;
+            for (var x in answerTitlejson) {
+                answerCount++;
+            }
+            if (answerCount == 0) {
+                alert("系统题库为空，请做一遍练习题，丰富题库！");
+            }
+            console.log(answerTitlejson);
+            console.log("题库数量为：" + answerCount + "条。");
+            var rightqidcount = 0;
+            var wrongqidcount = 0;
+            var AnswerString = "";
+            $(".item").each(function() {
+                var qitem = $(this);
+                var qid = qitem.attr("qid");
+                var answerTitleTempStr = qitem.find(".question-title").html();
+                var subStartIndex = answerTitleTempStr.indexOf(".");
+                var answerTitleStr = answerTitleTempStr.substring(subStartIndex).replace(/\s+/g, "");
+                var answer = null;
+                if (typeof totalAnswer[qid] !== 'undefined') {
+                    answer = totalAnswer[qid];
+                } else if (typeof answerTitlejson[answerTitleStr] !== 'undefined') {
+                    answer = answerTitlejson[answerTitleStr];
+                }
+                if (answer === null) {
+                    wrongqidcount++;
+                    qitem.css("background", "#ccc");
+                } else {
+                    AnswerString += qid + "=" + answer + "&";
+                    rightqidcount++;
+                    // 在界面上呈现选择结果（勾选对应选项）
+                    selectAnswerInUI(qitem, answer);
+                }
+            });
+            if (wrongqidcount > 0) {
+                allanserhasfind = false;
+            } else {
+                allanserhasfind = true;
+            }
+
+            AnswerString = AnswerString.substring(0, AnswerString.length - 1);
+            jQuery.ajax({
+                url: saveexamurl,
+                method: "post",
+                data: AnswerString,
+                success: function(data, text, xhr) {
+                    if (xhr.status == 200) {
+                        alert("已找到" + rightqidcount + "条题目答案，并保存！\n共" + wrongqidcount + "条题目未找到答案，未找到答案的题目已变灰!\n按F5刷新本页面可见！");
+                    } else {
+                        alert(data);
+                    }
+                },
+                error: function(data) {
+                    if (data.status == 400) {
+                        alert(data.responseText)
+                    } else {
+                        alert("提交失败");
+                    }
+                }
+            })
+            if (allanserhasfind) {
+                var issubmitanswer = confirm("全部答案已找齐，是否自动提交答案？");
+                if (issubmitanswer) {
+                    jQuery.ajax({
+                        url: examurl,
+                        method: "post",
+                        data: AnswerString,
+                        success: function(data, text, xhr) {
+                            if (xhr.status == 200) {
+                                window.location.href = '/study/exam';
+                            } else {
+                                alert(data);
+                            }
+                        },
+                        error: function(data) {
+                            if (data.status == 400) {
+                                alert(data.responseText)
+                            } else {
+                                alert("提交失败");
+                            }
+                        }
+                    })
+                }
+            }
+        }
+    });
+})();
